@@ -1,5 +1,6 @@
 use alloy::primitives::B256;
-use ssz::{Decode, Encode};
+use serde::{Deserialize, Serialize};
+use ssz::Encode;
 use ssz_derive::{Decode, Encode};
 
 use crate::{
@@ -12,17 +13,12 @@ use crate::{
 };
 
 /// A Portal State content value.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StateContentValue {
-    /// A content value type for retrieving a trie node.
     TrieNode(TrieNode),
-    /// A content value type for offering a trie node from the account trie.
     AccountTrieNodeWithProof(AccountTrieNodeWithProof),
-    /// A content value type for offering a trie node from the contract storage trie.
     ContractStorageTrieNodeWithProof(ContractStorageTrieNodeWithProof),
-    /// A content value type for retrieving contract's bytecode.
     ContractBytecode(ContractBytecode),
-    /// A content value type for offering contract's bytecode.
     ContractBytecodeWithProof(ContractBytecodeWithProof),
 }
 
@@ -40,32 +36,16 @@ impl ContentValue for StateContentValue {
     }
 
     fn decode(key: &Self::TContentKey, buf: &[u8]) -> Result<Self, ContentValueError> {
-        match key {
-            StateContentKey::AccountTrieNode(_) => {
-                if let Ok(value) = AccountTrieNodeWithProof::from_ssz_bytes(buf) {
-                    return Ok(Self::AccountTrieNodeWithProof(value));
-                }
-                if let Ok(value) = TrieNode::from_ssz_bytes(buf) {
-                    return Ok(Self::TrieNode(value));
-                }
-            }
-            StateContentKey::ContractStorageTrieNode(_) => {
-                if let Ok(value) = ContractStorageTrieNodeWithProof::from_ssz_bytes(buf) {
-                    return Ok(Self::ContractStorageTrieNodeWithProof(value));
-                }
-                if let Ok(value) = TrieNode::from_ssz_bytes(buf) {
-                    return Ok(Self::TrieNode(value));
-                }
-            }
-            StateContentKey::ContractBytecode(_) => {
-                if let Ok(value) = ContractBytecodeWithProof::from_ssz_bytes(buf) {
-                    return Ok(Self::ContractBytecodeWithProof(value));
-                }
-                if let Ok(value) = ContractBytecode::from_ssz_bytes(buf) {
-                    return Ok(Self::ContractBytecode(value));
-                }
-            }
+        let key_type = key.get_content_key_type();
+
+        if let Some(value) = key_type.try_decode_primary(buf) {
+            return Ok(value);
         }
+
+        if let Some(value) = key_type.try_decode_proof(buf) {
+            return Ok(value);
+        }
+
         Err(ContentValueError::UnknownContent {
             bytes: hex_encode(buf),
             subnetwork: Subnetwork::State,
@@ -73,45 +53,33 @@ impl ContentValue for StateContentValue {
     }
 }
 
-/// A content value type, used when retrieving a trie node.
-#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TrieNode {
     pub node: EncodedTrieNode,
 }
 
-/// A content value type, used when offering a trie node from the account trie.
-#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AccountTrieNodeWithProof {
-    /// An proof for the account trie node.
     pub proof: TrieProof,
-    /// A block at which the proof is anchored.
-    pub block_hash: B256,
-}
-/// A content value type, used when offering a trie node from the contract storage trie.
-#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
-pub struct ContractStorageTrieNodeWithProof {
-    /// A proof for the contract storage trie node.
-    pub storage_proof: TrieProof,
-    /// A proof for the account state.
-    pub account_proof: TrieProof,
-    /// A block at which the proof is anchored.
     pub block_hash: B256,
 }
 
-/// A content value type, used when retrieving contract's bytecode.
-#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ContractStorageTrieNodeWithProof {
+    pub storage_proof: TrieProof,
+    pub account_proof: TrieProof,
+    pub block_hash: B256,
+}
+
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContractBytecode {
     pub code: ByteCode,
 }
 
-/// A content value type, used when offering contract's bytecode.
-#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContractBytecodeWithProof {
-    /// A contract's bytecode.
     pub code: ByteCode,
-    /// A proof for the account state of the corresponding contract.
     pub account_proof: TrieProof,
-    /// A block at which the proof is anchored.
     pub block_hash: B256,
 }
 

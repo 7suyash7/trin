@@ -359,6 +359,16 @@ async fn peertest_ping_cross_discv5_protocol_id() {
     mainnet_handle.stop().unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[serial]
+async fn peertest_state_get_decoded_content() {
+    let (peertest, target, handle) =
+        setup_peertest(&Network::Mainnet, &[Subnetwork::History, Subnetwork::State]).await;
+    peertest::scenarios::state::test_state_get_decoded_content(&peertest, &target).await;
+    peertest.exit_all_nodes();
+    handle.stop().unwrap();
+}
+
 async fn setup_peertest(
     network: &Network,
     subnetworks: &[Subnetwork],

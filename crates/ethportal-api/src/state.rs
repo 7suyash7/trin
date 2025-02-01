@@ -4,6 +4,7 @@ use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use crate::{
     types::{
         content_key::state::StateContentKey,
+        content_value::state::StateContentValue,
         enr::Enr,
         portal::{
             AcceptInfo, DataRadius, FindContentInfo, FindNodesInfo, GetContentInfo,
@@ -132,4 +133,12 @@ pub trait StateNetworkApi {
     /// Get a content from the local database
     #[method(name = "stateLocalContent")]
     async fn local_content(&self, content_key: StateContentKey) -> RpcResult<RawContentValue>;
+
+    /// Get and decode content in a single step. Returns the specific value variant based on the
+    /// content key type.
+    #[method(name = "stateGetDecodedContent")]
+    async fn get_decoded_content(
+        &self,
+        content_key: StateContentKey,
+    ) -> RpcResult<StateContentValue>;
 }

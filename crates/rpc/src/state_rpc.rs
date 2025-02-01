@@ -205,6 +205,18 @@ impl StateNetworkApiServer for StateNetworkApi {
         let endpoint = StateEndpoint::LocalContent(content_key);
         Ok(proxy_to_subnet(&self.network, endpoint).await?)
     }
+
+    /// Get and decode content in a single step.
+    async fn get_decoded_content(
+        &self,
+        content_key: StateContentKey,
+    ) -> RpcResult<StateContentValue> {
+        let content_info = self.get_content(content_key.clone()).await?;
+
+        StateContentValue::decode(&content_key, &content_info.content)
+            .map_err(RpcServeError::from)
+            .map_err(Into::into)
+    }
 }
 
 impl std::fmt::Debug for StateNetworkApi {

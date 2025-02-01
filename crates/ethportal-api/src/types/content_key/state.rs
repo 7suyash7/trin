@@ -1,15 +1,22 @@
 use std::{fmt, hash::Hash};
 
-use alloy::primitives::B256;
+use alloy::primitives::{keccak256, B256};
 use bytes::{BufMut, BytesMut};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ssz::{Decode, DecodeError, Encode};
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    types::{content_key::overlay::OverlayContentKey, state_trie::nibbles::Nibbles},
+    types::{
+        content_key::overlay::OverlayContentKey,
+        content_value::state::{
+            AccountTrieNodeWithProof, ContractBytecode, ContractBytecodeWithProof,
+            ContractStorageTrieNodeWithProof, TrieNode,
+        },
+        state_trie::nibbles::Nibbles,
+    },
     utils::bytes::hex_encode_compact,
-    ContentKeyError, RawContentKey,
+    ContentKeyError, RawContentKey, StateContentValue,
 };
 
 // Prefixes for the different types of state content keys:
@@ -17,6 +24,14 @@ use crate::{
 pub const STATE_ACCOUNT_TRIE_NODE_KEY_PREFIX: u8 = 0x20;
 pub const STATE_STORAGE_TRIE_NODE_KEY_PREFIX: u8 = 0x21;
 pub const STATE_CONTRACT_BYTECODE_KEY_PREFIX: u8 = 0x22;
+
+/// Generic trait for handling type-specific decoding and validation
+pub trait ContentKeyType {
+    /// Try to decode as primary content type
+    fn try_decode_primary(&self, buf: &[u8]) -> Option<StateContentValue>;
+    /// Try to decode as proof type
+    fn try_decode_proof(&self, buf: &[u8]) -> Option<StateContentValue>;
+}
 
 /// A content key in the state overlay network.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,6 +77,98 @@ pub struct ContractBytecodeKey {
     pub address_hash: B256,
     /// Hash of the bytecode.
     pub code_hash: B256,
+}
+
+impl ContentKeyType for AccountTrieNodeKey {
+    fn try_decode_primary(&self, buf: &[u8]) -> Option<StateContentValue> {
+        TrieNode::from_ssz_bytes(buf).ok().and_then(|value| {
+            if value.node.node_hash() == self.node_hash {
+                Some(StateContentValue::TrieNode(value))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn try_decode_proof(&self, buf: &[u8]) -> Option<StateContentValue> {
+        AccountTrieNodeWithProof::from_ssz_bytes(buf)
+            .ok()
+            .and_then(|value| {
+                if value
+                    .proof
+                    .iter()
+                    .any(|node| node.node_hash() == self.node_hash)
+                {
+                    Some(StateContentValue::AccountTrieNodeWithProof(value))
+                } else {
+                    None
+                }
+            })
+    }
+}
+
+impl ContentKeyType for ContractStorageTrieNodeKey {
+    fn try_decode_primary(&self, buf: &[u8]) -> Option<StateContentValue> {
+        TrieNode::from_ssz_bytes(buf).ok().and_then(|value| {
+            if value.node.node_hash() == self.node_hash {
+                Some(StateContentValue::TrieNode(value))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn try_decode_proof(&self, buf: &[u8]) -> Option<StateContentValue> {
+        ContractStorageTrieNodeWithProof::from_ssz_bytes(buf)
+            .ok()
+            .and_then(|value| {
+                if value
+                    .storage_proof
+                    .iter()
+                    .any(|node| node.node_hash() == self.node_hash)
+                {
+                    Some(StateContentValue::ContractStorageTrieNodeWithProof(value))
+                } else {
+                    None
+                }
+            })
+    }
+}
+
+impl ContentKeyType for ContractBytecodeKey {
+    fn try_decode_primary(&self, buf: &[u8]) -> Option<StateContentValue> {
+        ContractBytecode::from_ssz_bytes(buf)
+            .ok()
+            .and_then(|value| {
+                if keccak256(&*value.code) == self.code_hash {
+                    Some(StateContentValue::ContractBytecode(value))
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn try_decode_proof(&self, buf: &[u8]) -> Option<StateContentValue> {
+        ContractBytecodeWithProof::from_ssz_bytes(buf)
+            .ok()
+            .and_then(|value| {
+                if keccak256(&*value.code) == self.code_hash {
+                    Some(StateContentValue::ContractBytecodeWithProof(value))
+                } else {
+                    None
+                }
+            })
+    }
+}
+
+impl StateContentKey {
+    pub fn get_content_key_type(&self) -> &dyn ContentKeyType {
+        match self {
+            Self::AccountTrieNode(key) => key,
+            Self::ContractStorageTrieNode(key) => key,
+            Self::ContractBytecode(key) => key,
+        }
+    }
 }
 
 impl OverlayContentKey for StateContentKey {
@@ -177,7 +284,9 @@ mod test {
     use serde_yaml::Value;
 
     use super::*;
-    use crate::{test_utils::read_file_from_tests_submodule, utils::bytes::hex_decode};
+    use crate::{
+        test_utils::read_file_from_tests_submodule, utils::bytes::hex_decode, RawContentValue,
+    };
 
     const TEST_DATA_DIRECTORY: &str = "tests/mainnet/state/serialization";
 
@@ -289,6 +398,100 @@ mod test {
         let expected_content_id = yaml_as_b256(&yaml["content_id"]);
 
         assert_eq!(B256::from(content_key.content_id()), expected_content_id);
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::trie_node("account_trie_node_key.yaml", "trie_node.yaml")]
+    #[case::account_trie_node_with_proof(
+        "account_trie_node_key.yaml",
+        "account_trie_node_with_proof.yaml"
+    )]
+    #[case::contract_storage_trie_node_with_proof(
+        "contract_storage_trie_node_key.yaml",
+        "contract_storage_trie_node_with_proof.yaml"
+    )]
+    #[case::contract_bytecode("contract_bytecode_key.yaml", "contract_bytecode.yaml")]
+    #[case::contract_bytecode_with_proof(
+        "contract_bytecode_key.yaml",
+        "contract_bytecode_with_proof.yaml"
+    )]
+    fn test_content_key_type_validation(
+        #[case] key_filename: &str,
+        #[case] value_filename: &str,
+    ) -> Result<()> {
+        use crate::RawContentValue;
+
+        let key_file = read_yaml_file(key_filename)?;
+        let key = StateContentKey::deserialize(&key_file["content_key"])?;
+        let value = read_yaml_file(value_filename)?;
+        let content_value_bytes = RawContentValue::deserialize(&value["content_value"])?;
+
+        let key_type = key.get_content_key_type();
+        let decoded = if let Some(value) = key_type.try_decode_primary(&content_value_bytes) {
+            value
+        } else if let Some(value) = key_type.try_decode_proof(&content_value_bytes) {
+            value
+        } else {
+            panic!("Failed to decode content: neither primary nor proof type matched");
+        };
+
+        match key {
+            StateContentKey::AccountTrieNode(_) => {
+                assert!(matches!(
+                    decoded,
+                    StateContentValue::TrieNode(_) | StateContentValue::AccountTrieNodeWithProof(_)
+                ));
+            }
+            StateContentKey::ContractStorageTrieNode(_) => {
+                assert!(matches!(
+                    decoded,
+                    StateContentValue::TrieNode(_)
+                        | StateContentValue::ContractStorageTrieNodeWithProof(_)
+                ));
+            }
+            StateContentKey::ContractBytecode(_) => {
+                assert!(matches!(
+                    decoded,
+                    StateContentValue::ContractBytecode(_)
+                        | StateContentValue::ContractBytecodeWithProof(_)
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_content_key_type_wrong_types() -> Result<()> {
+        let test_cases = [("contract_bytecode_key.yaml", "trie_node.yaml")];
+
+        for (key_file, value_file) in test_cases {
+            let key = StateContentKey::deserialize(&read_yaml_file(key_file)?["content_key"])?;
+            let content_value_bytes =
+                RawContentValue::deserialize(&read_yaml_file(value_file)?["content_value"])?;
+
+            let key_type = key.get_content_key_type();
+            assert!(key_type.try_decode_primary(&content_value_bytes).is_none());
+            assert!(key_type.try_decode_proof(&content_value_bytes).is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_content_key_type_malformed_data() -> Result<()> {
+        let key_file = read_yaml_file("account_trie_node_key.yaml")?;
+        let key = StateContentKey::deserialize(&key_file["content_key"])?;
+        let key_type = key.get_content_key_type();
+
+        // Test empty data
+        assert!(key_type.try_decode_primary(&[]).is_none());
+        assert!(key_type.try_decode_proof(&[]).is_none());
+
+        // Test invalid data
+        assert!(key_type.try_decode_primary(&[0x99]).is_none());
+        assert!(key_type.try_decode_proof(&[0x99]).is_none());
+
         Ok(())
     }
 

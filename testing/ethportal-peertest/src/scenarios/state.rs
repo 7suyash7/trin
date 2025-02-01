@@ -73,3 +73,19 @@ async fn test_state_offer(fixture: &StateFixture, target: &Client, peer: &Peerte
     let lookup_content_value = wait_for_state_content(&peer.ipc_client, fixture.key.clone()).await;
     assert_eq!(lookup_content_value, fixture.lookup_value());
 }
+
+pub async fn test_state_get_decoded_content(_peertest: &Peertest, target: &Client) {
+    for fixture in fixtures_state_account_trie_node() {
+        info!("Testing get_decoded_content for key: {:?}", fixture.key);
+
+        StateNetworkApiClient::store(target, fixture.key.clone(), fixture.raw_offer_value.clone())
+            .await
+            .unwrap();
+
+        let decoded = StateNetworkApiClient::get_decoded_content(target, fixture.key.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(decoded, fixture.lookup_value());
+    }
+}
